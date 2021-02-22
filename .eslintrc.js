@@ -1,10 +1,13 @@
 module.exports = {
-  extends: 'eslint:recommended',
-  env: 'node',
+  root: true,
+  parser: '@typescript-eslint/parser',
+  plugins: ['@typescript-eslint'],
+  extends: ['eslint:recommended', 'plugin:@typescript-eslint/recommended'],
+  env: { node: true },
   overrides: [
     {
       files: ['src/**/*.test.ts'],
-      env: 'jest',
+      env: { jest: true },
     },
   ],
 };

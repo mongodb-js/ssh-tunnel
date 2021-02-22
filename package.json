@@ -5,7 +5,9 @@
   "main": "lib/index.js",
   "scripts": {
     "test": "jest",
-    "build": "tsc && gen-esm-wrapper . ./lib/esm-wrapper.mjs"
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
+    "tsc": "tsc",
+    "build": "npm run tsc && gen-esm-wrapper . ./lib/esm-wrapper.mjs"
   },
   "exports": {
     ".": {
@@ -26,6 +28,8 @@
     "@tsconfig/node14": "^1.0.0",
     "@types/jest": "^26.0.20",
     "@types/ssh2": "^0.5.46",
+    "@typescript-eslint/eslint-plugin": "^4.15.1",
+    "@typescript-eslint/parser": "^4.15.1",
     "eslint": "^7.20.0",
     "gen-esm-wrapper": "^1.1.1",
     "jest": "^26.6.3",

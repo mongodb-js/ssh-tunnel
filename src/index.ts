@@ -15,18 +15,23 @@ type LocalProxyServerConfig = {
   localPort: number;
 };
 
+type ErrorWithOrigin = Error & { origin?: string };
+
 export type SshTunnelConfig = ConnectConfig &
   ForwardOutConfig &
   LocalProxyServerConfig;
 
 function getConnectConfig(config: Partial<SshTunnelConfig>): ConnectConfig {
   const {
+    // Doing it the other way around would be too much
+    /* eslint-disable @typescript-eslint/no-unused-vars */
     srcHost,
     srcPort,
     dstHost,
     dstPort,
     localHost,
     localPort,
+    /* eslint-enable @typescript-eslint/no-unused-vars */
     ...connectConfig
   } = config;
 
@@ -82,13 +87,13 @@ class SshTunnel extends EventEmitter {
         }
       });
 
-      sshClient.on('error', (err) => {
-        (err as any).origin = 'ssh-client';
+      sshClient.on('error', (err: ErrorWithOrigin) => {
+        err.origin = 'ssh-client';
         socket.destroy(err);
       });
 
-      socket.on('error', (err) => {
-        (err as any).origin = (err as any).origin ?? 'connection';
+      socket.on('error', (err: ErrorWithOrigin) => {
+        err.origin = err.origin ?? 'connection';
         this.server.emit('error', err);
       });
 

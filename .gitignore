@@ -2,6 +2,7 @@ node_modules
 lib
 .*
 !.gitignore
+!.eslintignore
 !.github
 !.eslintrc.js
 !.prettierrc.js

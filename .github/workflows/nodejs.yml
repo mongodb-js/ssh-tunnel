@@ -19,5 +19,9 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Install Dependencies
         run: npm install
+      - name: Lint
+        run: npm run lint
+      - name: TS Check
+        run: npm run tsc -- --noEmit
       - name: Test
         run: npm test
