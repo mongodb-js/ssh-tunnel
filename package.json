@@ -25,6 +25,7 @@
   ],
   "license": "Apache-2.0",
   "devDependencies": {
+    "@tsconfig/node12": "^1.0.7",
     "@tsconfig/node14": "^1.0.0",
     "@types/jest": "^26.0.20",
     "@types/ssh2": "^0.5.46",
