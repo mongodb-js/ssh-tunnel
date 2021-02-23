@@ -1,6 +1,6 @@
 {
   "name": "@mongodb-js/ssh-tunnel",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Yet another ssh tunnel based on ssh2",
   "main": "lib/index.js",
   "scripts": {
