@@ -4,14 +4,14 @@ import { createServer, Server, Socket } from 'net';
 import { Client, ConnectConfig } from 'ssh2';
 
 type ForwardOutConfig = {
-  srcHost: string;
+  srcAddr: string;
   srcPort: number;
-  dstHost: string;
+  dstAddr: string;
   dstPort: number;
 };
 
 type LocalProxyServerConfig = {
-  localHost: string;
+  localAddr: string;
   localPort: number;
 };
 
@@ -25,11 +25,11 @@ function getConnectConfig(config: Partial<SshTunnelConfig>): ConnectConfig {
   const {
     // Doing it the other way around would be too much
     /* eslint-disable @typescript-eslint/no-unused-vars */
-    srcHost,
+    srcAddr,
     srcPort,
-    dstHost,
+    dstAddr,
     dstPort,
-    localHost,
+    localAddr,
     localPort,
     /* eslint-enable @typescript-eslint/no-unused-vars */
     ...connectConfig
@@ -45,12 +45,12 @@ function getSshTunnelConfig(config: Partial<SshTunnelConfig>): SshTunnelConfig {
     {},
     {
       srcPort: 0,
-      srcHost: '127.0.0.1',
-      dstHost: '127.0.0.1',
+      srcAddr: '127.0.0.1',
+      dstAddr: '127.0.0.1',
       dstPort: connectConfig.port,
     },
     {
-      localHost: '127.0.0.1',
+      localAddr: '127.0.0.1',
       localPort: connectConfig.port,
     },
     config
@@ -76,10 +76,10 @@ class SshTunnel extends EventEmitter {
       this.connections.add(socket);
 
       sshClient.on('ready', async () => {
-        const { srcHost, srcPort, dstHost, dstPort } = this.rawConfig;
+        const { srcAddr, srcPort, dstAddr, dstPort } = this.rawConfig;
 
         try {
-          const channel = await forwardOut(srcHost, srcPort, dstHost, dstPort);
+          const channel = await forwardOut(srcAddr, srcPort, dstAddr, dstPort);
           socket.pipe(channel).pipe(socket);
         } catch (err) {
           err.origin = 'ssh-client';
@@ -136,8 +136,8 @@ class SshTunnel extends EventEmitter {
       port?: number,
       host?: string
     ) => Promise<void> = promisify(this.server.listen.bind(this.server));
-    const { localPort, localHost } = this.rawConfig;
-    await serverListen(localPort, localHost);
+    const { localPort, localAddr } = this.rawConfig;
+    await serverListen(localPort, localAddr);
   }
 
   async close(): Promise<void> {

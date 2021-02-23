@@ -94,8 +94,8 @@ describe('SSHTunnel', () => {
   });
 
   it('creates a tunnel that allows to request remote server through an ssh server', async () => {
-    const { localHost, localPort } = sshTunnel.config;
-    const reqPath = `http://${localHost}:${localPort}`;
+    const { localAddr, localPort } = sshTunnel.config;
+    const reqPath = `http://${localAddr}:${localPort}`;
     const res = await request(reqPath);
     expect(res).toBe('Hello from http server');
   });
