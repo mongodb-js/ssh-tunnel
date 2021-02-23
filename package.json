@@ -7,7 +7,11 @@
     "test": "jest",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "tsc": "tsc",
-    "build": "npm run tsc && gen-esm-wrapper . ./lib/esm-wrapper.mjs"
+    "build": "npm run tsc && gen-esm-wrapper . ./lib/esm-wrapper.mjs",
+    "prepublishOnly": "npm run lint && npm run test && npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "exports": {
     ".": {
