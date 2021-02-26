@@ -143,10 +143,16 @@ class SshTunnel extends EventEmitter {
   async close(): Promise<void> {
     const serverClose = promisify(this.server.close.bind(this.server));
 
-    try {
-      await serverClose();
-    } finally {
-      await this.closeOpenConnections();
+    const [maybeError] = await Promise.all([
+      // If we catch anything, just return the error instead of throwing, we
+      // want to await on closing the connections before re-throwing server
+      // close error
+      serverClose().catch<Error>((e) => e),
+      this.closeOpenConnections(),
+    ]);
+
+    if (maybeError) {
+      throw maybeError;
     }
   }
 

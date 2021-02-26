@@ -7,6 +7,10 @@ import { AddressInfo, Socket } from 'net';
 
 import SSHTunnel, { SshTunnelConfig } from './index';
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function request(url: string) {
   return new Promise((resolve, reject) => {
     const req = get(url, (res) => {
@@ -14,19 +18,26 @@ function request(url: string) {
       res.on('data', (chunk) => {
         data += chunk;
       });
-      res.on('end', () => {
+      res.once('end', () => {
         resolve(data.trim());
       });
     });
-    req.on('error', (e) => {
+    req.once('error', (e) => {
       reject(e);
     });
   });
 }
 
+let responseTimeout = 0;
+
+function setResponseTimeout(ms: number) {
+  responseTimeout = ms;
+}
+
 function createTestHttpServer(): Promise<HttpServer> {
   return new Promise((resolve) => {
-    const server = createServer((_req, res) => {
+    const server = createServer(async (_req, res) => {
+      await sleep(responseTimeout);
       res.end('Hello from http server\n');
     });
     server.listen(0, 'localhost', () => {
@@ -72,6 +83,11 @@ async function createTestSshTunnel(config: Partial<SshTunnelConfig>) {
 describe('SSHTunnel', () => {
   let sshServer: SSHServer, httpServer: HttpServer, sshTunnel: SSHTunnel;
 
+  function getRequestPath() {
+    const { localAddr, localPort } = sshTunnel.config;
+    return `http://${localAddr}:${localPort}`;
+  }
+
   beforeAll(async () => {
     sshServer = await createTestSshServer();
     httpServer = await createTestHttpServer();
@@ -84,9 +100,12 @@ describe('SSHTunnel', () => {
   });
 
   afterAll(async () => {
-    await sshTunnel.close();
-    await promisify(httpServer.close.bind(httpServer))();
+    await sshTunnel.close().catch(() => {
+      /* Might not be running already */
+    });
     await promisify(sshServer.close.bind(sshServer))();
+    await promisify(httpServer.close.bind(httpServer))();
+    setResponseTimeout(0);
   });
 
   it('should be main export', () => {
@@ -94,9 +113,25 @@ describe('SSHTunnel', () => {
   });
 
   it('creates a tunnel that allows to request remote server through an ssh server', async () => {
-    const { localAddr, localPort } = sshTunnel.config;
-    const reqPath = `http://${localAddr}:${localPort}`;
-    const res = await request(reqPath);
+    const res = await request(getRequestPath());
     expect(res).toBe('Hello from http server');
+  });
+
+  it('closes any connections on tunnel close', async () => {
+    setResponseTimeout(500);
+
+    expect.assertions(1);
+
+    try {
+      await Promise.all([
+        request(getRequestPath()),
+        (async () => {
+          await sleep(50);
+          await sshTunnel.close();
+        })(),
+      ]);
+    } catch (err) {
+      expect(err.message).toMatchInlineSnapshot(`"socket hang up"`);
+    }
   });
 });
