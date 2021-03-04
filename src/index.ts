@@ -1,7 +1,7 @@
 import { promisify } from 'util';
 import { EventEmitter, once } from 'events';
 import { createServer, Server, Socket } from 'net';
-import { Client, ConnectConfig } from 'ssh2';
+import { Client as SshClient, ClientChannel, ConnectConfig } from 'ssh2';
 
 type ForwardOutConfig = {
   srcAddr: string;
@@ -51,7 +51,7 @@ function getSshTunnelConfig(config: Partial<SshTunnelConfig>): SshTunnelConfig {
     },
     {
       localAddr: '127.0.0.1',
-      localPort: connectConfig.port,
+      localPort: 0,
     },
     config
   );
@@ -59,38 +59,29 @@ function getSshTunnelConfig(config: Partial<SshTunnelConfig>): SshTunnelConfig {
 
 class SshTunnel extends EventEmitter {
   private connections: Set<Socket> = new Set();
-
   private server: Server;
-
   private rawConfig: SshTunnelConfig;
+  private sshClient: SshClient;
+  private serverListen: (port?: number, host?: string) => Promise<void>;
+  private serverClose: () => Promise<void>;
+  private forwardOut: (
+    srcIP: string,
+    srcPort: number,
+    dstIP: string,
+    dstPort: number
+  ) => Promise<ClientChannel>;
 
   constructor(config: Partial<SshTunnelConfig> = {}) {
     super();
 
     this.rawConfig = getSshTunnelConfig(config);
 
-    this.server = createServer((socket) => {
-      const sshClient = new Client();
-      const forwardOut = promisify(sshClient.forwardOut.bind(sshClient));
+    this.sshClient = new SshClient();
 
+    this.forwardOut = promisify(this.sshClient.forwardOut.bind(this.sshClient));
+
+    this.server = createServer(async (socket) => {
       this.connections.add(socket);
-
-      sshClient.on('ready', async () => {
-        const { srcAddr, srcPort, dstAddr, dstPort } = this.rawConfig;
-
-        try {
-          const channel = await forwardOut(srcAddr, srcPort, dstAddr, dstPort);
-          socket.pipe(channel).pipe(socket);
-        } catch (err) {
-          err.origin = 'ssh-client';
-          socket.destroy(err);
-        }
-      });
-
-      sshClient.on('error', (err: ErrorWithOrigin) => {
-        err.origin = 'ssh-client';
-        socket.destroy(err);
-      });
 
       socket.on('error', (err: ErrorWithOrigin) => {
         err.origin = err.origin ?? 'connection';
@@ -98,20 +89,29 @@ class SshTunnel extends EventEmitter {
       });
 
       socket.once('close', () => {
-        sshClient.end();
-      });
-
-      socket.once('close', () => {
         this.connections.delete(socket);
       });
 
       try {
-        sshClient.connect(getConnectConfig(this.rawConfig));
+        const { srcAddr, srcPort, dstAddr, dstPort } = this.rawConfig;
+
+        const channel = await this.forwardOut(
+          srcAddr,
+          srcPort,
+          dstAddr,
+          dstPort
+        );
+
+        socket.pipe(channel).pipe(socket);
       } catch (err) {
         err.origin = 'ssh-client';
         socket.destroy(err);
       }
     });
+
+    this.serverListen = promisify(this.server.listen.bind(this.server));
+
+    this.serverClose = promisify(this.server.close.bind(this.server));
 
     (['close', 'connection', 'error', 'listening'] as const).forEach(
       (eventName) => {
@@ -132,27 +132,47 @@ class SshTunnel extends EventEmitter {
   }
 
   async listen(): Promise<void> {
-    const serverListen: (
-      port?: number,
-      host?: string
-    ) => Promise<void> = promisify(this.server.listen.bind(this.server));
     const { localPort, localAddr } = this.rawConfig;
-    await serverListen(localPort, localAddr);
+
+    await this.serverListen(localPort, localAddr);
+
+    try {
+      await Promise.race([
+        once(this.sshClient, 'error').then(([err]) => {
+          throw err;
+        }),
+        (() => {
+          const waitForReady = once(this.sshClient, 'ready') as Promise<[void]>;
+          this.sshClient.connect(getConnectConfig(this.rawConfig));
+          return waitForReady;
+        })(),
+      ]);
+    } catch (err) {
+      await this.serverClose();
+      throw err;
+    }
   }
 
   async close(): Promise<void> {
-    const serverClose = promisify(this.server.close.bind(this.server));
-
     const [maybeError] = await Promise.all([
       // If we catch anything, just return the error instead of throwing, we
       // want to await on closing the connections before re-throwing server
       // close error
-      serverClose().catch<Error>((e) => e),
+      this.serverClose().catch<Error>((e) => e),
+      this.closeSshClient(),
       this.closeOpenConnections(),
     ]);
 
     if (maybeError) {
       throw maybeError;
+    }
+  }
+
+  private async closeSshClient() {
+    try {
+      return once(this.sshClient, 'close');
+    } finally {
+      this.sshClient.end();
     }
   }
 

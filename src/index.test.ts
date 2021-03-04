@@ -1,9 +1,10 @@
-import { Server as SSHServer } from 'ssh2';
-import { createServer, Server as HttpServer, get } from 'http';
+import { Server as SSHServer, ServerConfig } from 'ssh2';
+import { createServer, Server as HttpServer } from 'http';
 import { promisify } from 'util';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { AddressInfo, Socket } from 'net';
+import fetch from 'node-fetch';
 
 import SSHTunnel, { SshTunnelConfig } from './index';
 
@@ -11,47 +12,45 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function request(url: string) {
-  return new Promise((resolve, reject) => {
-    const req = get(url, (res) => {
-      let data = '';
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      res.once('end', () => {
-        resolve(data.trim());
-      });
-    });
-    req.once('error', (e) => {
-      reject(e);
-    });
-  });
-}
+let sshServer: SSHServer, httpServer: HttpServer, sshTunnel: SSHTunnel;
 
-let responseTimeout = 0;
-
-function setResponseTimeout(ms: number) {
-  responseTimeout = ms;
-}
-
-function createTestHttpServer(): Promise<HttpServer> {
+function createTestHttpServer(): Promise<void> {
   return new Promise((resolve) => {
-    const server = createServer(async (_req, res) => {
-      await sleep(responseTimeout);
-      res.end('Hello from http server\n');
+    httpServer = createServer(async (req, res) => {
+      if (req.url === '/error') {
+        res.statusCode = 500;
+        res.end('Error');
+      } else if (req.url === '/wait') {
+        await sleep(500);
+        res.end('Waited 500ms');
+      } else {
+        res.end('Hello from http server');
+      }
     });
-    server.listen(0, 'localhost', () => {
-      resolve(server);
+    httpServer.listen(0, 'localhost', () => {
+      resolve();
     });
   });
 }
 
-function createTestSshServer(): Promise<SSHServer> {
+async function stopTestHttpServer() {
+  try {
+    await promisify(httpServer.close.bind(httpServer))();
+    (httpServer as unknown) = null;
+  } catch {
+    // noop
+  }
+}
+
+function createTestSshServer(
+  config: Partial<ServerConfig> = {}
+): Promise<void> {
   return new Promise((resolve) => {
     const key = path.resolve(__dirname, '..', '__fixtures__', 'rsa');
-    const server = new SSHServer(
+    sshServer = new SSHServer(
       {
         hostKeys: [readFileSync(key)],
+        ...config,
       },
       (client) => {
         client
@@ -68,44 +67,54 @@ function createTestSshServer(): Promise<SSHServer> {
           });
       }
     );
-    server.listen(0, 'localhost', () => {
-      resolve(server);
-    });
+    sshServer.listen(0, 'localhost', () => resolve());
   });
 }
 
-async function createTestSshTunnel(config: Partial<SshTunnelConfig>) {
-  const tunnel = new SSHTunnel(config);
-  await tunnel.listen();
-  return tunnel;
+async function stopTestSshServer() {
+  try {
+    await promisify(sshServer.close.bind(sshServer))();
+    (sshServer as unknown) = null;
+  } catch {
+    // noop
+  }
+}
+
+async function createTestSshTunnel(config: Partial<SshTunnelConfig> = {}) {
+  sshTunnel = new SSHTunnel({
+    username: 'user',
+    port: sshServer.address().port,
+    dstPort: (httpServer.address() as AddressInfo).port,
+    localPort: 0,
+    ...config,
+  });
+  await sshTunnel.listen();
+}
+
+async function stopTestSshTunnel() {
+  try {
+    await sshTunnel.close();
+    (sshTunnel as unknown) = null;
+  } catch {
+    // noop
+  }
+}
+
+function getLocalServerHost() {
+  const { localAddr, localPort } = sshTunnel.config;
+  return `http://${localAddr}:${localPort}`;
 }
 
 describe('SSHTunnel', () => {
-  let sshServer: SSHServer, httpServer: HttpServer, sshTunnel: SSHTunnel;
-
-  function getRequestPath() {
-    const { localAddr, localPort } = sshTunnel.config;
-    return `http://${localAddr}:${localPort}`;
-  }
-
-  beforeAll(async () => {
-    sshServer = await createTestSshServer();
-    httpServer = await createTestHttpServer();
-    sshTunnel = await createTestSshTunnel({
-      username: 'user',
-      port: sshServer.address().port,
-      dstPort: (httpServer.address() as AddressInfo).port,
-      localPort: 0,
-    });
+  beforeEach(async () => {
+    await createTestSshServer();
+    await createTestHttpServer();
   });
 
-  afterAll(async () => {
-    await sshTunnel.close().catch(() => {
-      /* Might not be running already */
-    });
-    await promisify(sshServer.close.bind(sshServer))();
-    await promisify(httpServer.close.bind(httpServer))();
-    setResponseTimeout(0);
+  afterEach(async () => {
+    await stopTestSshTunnel();
+    await stopTestSshServer();
+    await stopTestHttpServer();
   });
 
   it('should be main export', () => {
@@ -113,25 +122,55 @@ describe('SSHTunnel', () => {
   });
 
   it('creates a tunnel that allows to request remote server through an ssh server', async () => {
-    const res = await request(getRequestPath());
-    expect(res).toBe('Hello from http server');
+    await createTestSshTunnel();
+
+    const res = await fetch(getLocalServerHost());
+    expect(await res.text()).toMatchInlineSnapshot(`"Hello from http server"`);
   });
 
   it('closes any connections on tunnel close', async () => {
-    setResponseTimeout(500);
+    await createTestSshTunnel();
 
     expect.assertions(1);
 
     try {
       await Promise.all([
-        request(getRequestPath()),
+        fetch(`${getLocalServerHost()}/wait`),
         (async () => {
           await sleep(50);
           await sshTunnel.close();
         })(),
       ]);
     } catch (err) {
-      expect(err.message).toMatchInlineSnapshot(`"socket hang up"`);
+      expect(err.message).toEqual(expect.stringMatching(/socket hang up/));
+    }
+  });
+
+  it('fails on listen call if ssh server is not available', async () => {
+    expect.assertions(1);
+
+    try {
+      await createTestSshTunnel({
+        host: 'nonexistent-ssh-server.test',
+        port: 4242,
+      });
+    } catch (err) {
+      expect(err.message).toMatchInlineSnapshot(
+        `"getaddrinfo ENOTFOUND nonexistent-ssh-server.test"`
+      );
+    }
+  });
+
+  it('stops http server if encountered an error connecting to ssh server', async () => {
+    expect.assertions(1);
+
+    try {
+      await createTestSshTunnel({
+        host: 'nonexistent-ssh-server.test',
+        port: 4242,
+      });
+    } catch {
+      expect(sshTunnel['server'].listening).toBe(false);
     }
   });
 });
