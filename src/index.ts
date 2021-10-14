@@ -57,7 +57,7 @@ function getSshTunnelConfig(config: Partial<SshTunnelConfig>): SshTunnelConfig {
   );
 }
 
-class SshTunnel extends EventEmitter {
+export class SshTunnel extends EventEmitter {
   private connections: Set<Socket> = new Set();
   private server: Server;
   private rawConfig: SshTunnelConfig;
@@ -104,8 +104,8 @@ class SshTunnel extends EventEmitter {
 
         socket.pipe(channel).pipe(socket);
       } catch (err) {
-        err.origin = 'ssh-client';
-        socket.destroy(err);
+        (err as any).origin = 'ssh-client';
+        socket.destroy(err as Error);
       }
     });
 
